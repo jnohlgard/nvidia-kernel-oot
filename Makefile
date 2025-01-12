@@ -119,6 +119,7 @@ define display-cmd
 		KERNELRELEASE="" \
 		SYSSRC=$(KERNEL_SRC) \
 		SYSOUT=$(KBUILD_OUTPUT) \
+		OOTSRC=$(MAKEFILE_DIR)/nvidia-oot \
 		KBUILD_EXTRA_SYMBOLS=$(MAKEFILE_DIR)/nvidia-oot/Module.symvers \
 		SYSSRCHOST1X=$(MAKEFILE_DIR)/nvidia-oot/drivers/gpu/host1x/include \
 		CC="$(CC)" \
