@@ -8,11 +8,21 @@ MAKEFILE_DIR := $(abspath $(shell dirname $(lastword $(MAKEFILE_LIST))))
 NVIDIA_CONFTEST ?= $(MAKEFILE_DIR)/out/nvidia-conftest
 HOSTCC ?= gcc
 MODLIB ?= /lib/modules
-CC ?= $(CROSS_COMPILE)gcc
-CXX ?= $(CROSS_COMPILE)g++
-LD ?= $(CROSS_COMPILE)ld.bfd
-AR ?= $(CROSS_COMPILE)ar
-OBJCOPY ?= $(CROSS_COMPILE)objcopy
+ifeq ($(filter-out cc gcc,$(CC)),)
+  CC = $(CROSS_COMPILE)gcc
+endif
+ifeq ($(filter-out c++ g++,$(CXX)),)
+  CXX = $(CROSS_COMPILE)g++
+endif
+ifeq ($(filter-out ld ld.%,$(LD)),)
+  LD = $(CROSS_COMPILE)ld.bfd
+endif
+ifeq ($(filter-out ar,$(AR)),)
+  AR = $(CROSS_COMPILE)ar
+endif
+ifeq ($(filter-out objcopy,$(OBJCOPY)),)
+  OBJCOPY = $(CROSS_COMPILE)objcopy
+endif
 
 V ?= 0
 
