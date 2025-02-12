@@ -1,0 +1,139 @@
+ARG LINUX_VERSION=6.12.13
+ARG LINUX_TARXZ_SHA256=f3ebdeea9e555b4cface44e29670056f4024541e6bd222fbcf776c818974fbba
+ARG NVIDIA_EXTERNAL_MODULES_REPO=https://github.com/jnohlgard/nvidia-kernel-oot
+ARG NVIDIA_EXTERNAL_MODULES_BRANCH=main
+ARG BUILDPLATFORM
+ARG BUILDARCH
+ARG TARGETPLATFORM
+ARG TARGETARCH
+FROM --platform=${BUILDPLATFORM} docker.io/alpine/curl:latest AS curl
+FROM --platform=${BUILDPLATFORM} docker.io/alpine/git:latest AS git
+FROM --platform=${BUILDPLATFORM} registry.fedoraproject.org/fedora:41 AS base
+
+FROM curl AS download-kernel
+WORKDIR /download
+ARG LINUX_VERSION
+ARG LINUX_TARXZ_SHA256
+RUN downloaded_file=linux-${LINUX_VERSION}.tar.xz && \
+  curl -fLS \
+    -o ${downloaded_file} \
+    "https://cdn.kernel.org/pub/linux/kernel/v${LINUX_VERSION%%.*}.x/linux-${LINUX_VERSION}.tar.xz" && \
+  printf '%s *%s\n' \
+    "${LINUX_TARXZ_SHA256}" \
+    "${downloaded_file}" \
+    | sha256sum -c
+RUN mkdir -p /src/linux && \
+  tar --strip-components=1 \
+    -C /src/linux \
+    -axf "/download/linux-${LINUX_VERSION}.tar.xz"
+
+FROM git AS download-nvidia-oot
+WORKDIR /download
+ARG NVIDIA_EXTERNAL_MODULES_REPO
+ARG NVIDIA_EXTERNAL_MODULES_BRANCH
+RUN git clone \
+  --recursive \
+  --depth=1 --shallow-submodules \
+  --single-branch --branch="${NVIDIA_EXTERNAL_MODULES_BRANCH}" \
+  "${NVIDIA_EXTERNAL_MODULES_REPO}" \
+  nvidia-kernel-oot
+
+FROM base AS kernel-toolchain
+RUN --mount=type=cache,id=fedora-builder-cache-dnf5,target=/var/cache/libdnf5/,sharing=locked \
+  dnf install -y --setopt=install_weak_deps=false \
+    dnf-plugins-core \
+    coreutils \
+    git-core \
+    curl \
+    wget \
+    awk \
+    sed \
+    gcc-c++ \
+    binutils \
+    rust \
+    rust-src \
+    dtc \
+    acpica-tools \
+    ccache \
+    binutils-aarch64-linux-gnu \
+    gcc-c++-aarch64-linux-gnu \
+    binutils-x86_64-linux-gnu \
+    gcc-c++-x86_64-linux-gnu \
+    ;
+RUN --mount=type=cache,id=fedora-builder-cache-dnf5,target=/var/cache/libdnf5/,sharing=locked \
+  dnf builddep -y --setopt=install_weak_deps=false \
+    kernel
+ENV PATH=/usr/lib64/ccache:${PATH}
+
+# Branching on stage names below for cross compilation vs. native compilation
+FROM kernel-toolchain AS kernel-cross-${BUILDARCH}
+ENV CROSS_COMPILE=
+FROM kernel-toolchain AS kernel-cross-arm64
+ENV CROSS_COMPILE=aarch64-linux-gnu-
+ENV ARCH=arm64
+FROM kernel-toolchain AS kernel-cross-amd64
+ENV CROSS_COMPILE_amd64=x86_64-linux-gnu-
+ENV ARCH=x86_64
+
+# Use the stage above which provides env variables for either native or cross
+# compilation depending on the value of ${TARGETARCH}
+FROM kernel-cross-${TARGETARCH} AS kernel-prepare-${TARGETARCH}
+WORKDIR /src/linux
+COPY --from=download-kernel /src/linux/ /src/linux/
+ARG TARGETARCH
+COPY ./config-${TARGETARCH} .config
+RUN make -j$(nproc) olddefconfig
+RUN make -j$(nproc) prepare
+FROM kernel-prepare-${TARGETARCH} AS kernel-compile-${TARGETARCH}
+RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
+  make -j$(nproc)
+
+FROM kernel-compile-${TARGETARCH} AS kernel-modules-install-${TARGETARCH}
+ARG TARGETARCH
+RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
+  make -j$(nproc) \
+    INSTALL_MOD_PATH=/rootfs/usr \
+    INSTALL_MOD_STRIP=1 \
+    modules_install
+RUN KERNELRELEASE=$(cat include/config/kernel.release) && \
+  [ -n "${KERNELRELEASE}" ] && \
+  xz --stdout --best < Module.symvers > /rootfs/usr/lib/modules/${KERNELRELEASE}/symvers.xz && \
+  xz --stdout --best < System.map > /rootfs/usr/lib/modules/${KERNELRELEASE}/System.map.xz && \
+  xz --stdout --best < .config > /rootfs/usr/lib/modules/${KERNELRELEASE}/config.xz
+
+FROM kernel-modules-install-${TARGETARCH} AS kernel-install-${TARGETARCH}
+ARG TARGETARCH
+RUN mkdir -p /rootfs/boot/ && \
+  KERNELRELEASE=$(cat include/config/kernel.release) && \
+  [ -n "${KERNELRELEASE}" ] && \
+  cp -v arch/${TARGETARCH}/boot/vmlinuz.efi /boot/vmlinuz && \
+  rm -f /rootfs/usr/lib/modules/${KERNELRELEASE}/build
+
+FROM kernel-compile-${TARGETARCH} AS nvidia-oot-compile-${TARGETARCH}
+ARG TARGETARCH
+WORKDIR /src/nvidia-kernel-oot
+COPY --from=download-nvidia-oot /download/nvidia-kernel-oot/ ./
+ENV KERNEL_PATH=/src/linux
+ENV KERNEL_SRC=/src/linux
+ENV KBUILD_OUTPUT=/src/linux
+ENV INSTALL_MOD_PATH=/rootfs/usr
+ENV INSTALL_MOD_DIR=updates
+RUN --mount=type=cache,id=ccache-nvidia-oot-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
+  KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
+  [ -n "${KERNELRELEASE}" ] && \
+  make -j$(nproc) \
+    MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
+    modules
+FROM nvidia-oot-compile-${TARGETARCH} AS nvidia-oot-modules-install-${TARGETARCH}
+RUN KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
+  [ -n "${KERNELRELEASE}" ] && \
+  make -j$(nproc) \
+    MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
+    modules_install && \
+  rm -f /rootfs/usr/lib/modules/${KERNELRELEASE}/build
+FROM --platform=${TARGETPLATFORM} scratch AS finalize-rootfs
+ARG TARGETARCH
+COPY --from=kernel-install-${TARGETARCH} /rootfs/ /rootfs/
+COPY --from=nvidia-oot-modules-install-${TARGETARCH} /rootfs/ /rootfs/
+FROM --platform=${TARGETPLATFORM} scratch AS pkg-kernel
+COPY --from=finalize-rootfs /rootfs/ /
