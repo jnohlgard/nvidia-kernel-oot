@@ -66,8 +66,8 @@ RUN --mount=type=cache,id=fedora-builder-cache-dnf5,target=/var/cache/libdnf5/,s
 ENV PATH=/usr/lib64/ccache:${PATH}
 
 # Branching on stage names below for cross compilation vs. native compilation
-FROM kernel-toolchain AS kernel-cross-${BUILDARCH}
-ENV CROSS_COMPILE=
+#FROM kernel-toolchain AS kernel-cross-${BUILDARCH}
+#ENV CROSS_COMPILE=
 FROM kernel-toolchain AS kernel-cross-arm64
 ENV CROSS_COMPILE=aarch64-linux-gnu-
 ENV ARCH=arm64
@@ -77,18 +77,18 @@ ENV ARCH=x86_64
 
 # Use the stage above which provides env variables for either native or cross
 # compilation depending on the value of ${TARGETARCH}
-FROM kernel-cross-${TARGETARCH} AS kernel-prepare-${TARGETARCH}
+FROM kernel-cross-${TARGETARCH} AS kernel-prepare
 WORKDIR /src/linux
 COPY --from=download-kernel /src/linux/ /src/linux/
 ARG TARGETARCH
 COPY ./config-${TARGETARCH} .config
 RUN make -j$(nproc) olddefconfig
 RUN make -j$(nproc) prepare
-FROM kernel-prepare-${TARGETARCH} AS kernel-compile-${TARGETARCH}
+FROM kernel-prepare AS kernel-compile
 RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
   make -j$(nproc)
 
-FROM kernel-compile-${TARGETARCH} AS kernel-modules-install-${TARGETARCH}
+FROM kernel-compile AS kernel-modules-install
 ARG TARGETARCH
 RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
   make -j$(nproc) \
@@ -101,15 +101,12 @@ RUN KERNELRELEASE=$(cat include/config/kernel.release) && \
   xz --stdout --best < System.map > /rootfs/usr/lib/modules/${KERNELRELEASE}/System.map.xz && \
   xz --stdout --best < .config > /rootfs/usr/lib/modules/${KERNELRELEASE}/config.xz
 
-FROM kernel-modules-install-${TARGETARCH} AS kernel-install-${TARGETARCH}
+FROM kernel-compile AS kernel-install
 ARG TARGETARCH
 RUN mkdir -p /rootfs/boot/ && \
-  KERNELRELEASE=$(cat include/config/kernel.release) && \
-  [ -n "${KERNELRELEASE}" ] && \
-  cp -v arch/${TARGETARCH}/boot/vmlinuz.efi /boot/vmlinuz && \
-  rm -f /rootfs/usr/lib/modules/${KERNELRELEASE}/build
+  cp -v arch/${TARGETARCH}/boot/vmlinuz.efi /rootfs/boot/vmlinuz
 
-FROM kernel-compile-${TARGETARCH} AS nvidia-oot-compile-${TARGETARCH}
+FROM kernel-modules-install AS nvidia-oot-compile
 ARG TARGETARCH
 WORKDIR /src/nvidia-kernel-oot
 COPY --from=download-nvidia-oot /download/nvidia-kernel-oot/ ./
@@ -124,16 +121,15 @@ RUN --mount=type=cache,id=ccache-nvidia-oot-compile-${TARGETARCH},target=/root/.
   make -j$(nproc) \
     MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
     modules
-FROM nvidia-oot-compile-${TARGETARCH} AS nvidia-oot-modules-install-${TARGETARCH}
+FROM nvidia-oot-compile AS nvidia-oot-modules-install
 RUN KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
   [ -n "${KERNELRELEASE}" ] && \
   make -j$(nproc) \
     MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
     modules_install && \
   rm -f /rootfs/usr/lib/modules/${KERNELRELEASE}/build
-FROM --platform=${TARGETPLATFORM} scratch AS finalize-rootfs
+RUN rm -f /rootfs/usr/lib/modules/*/build
+FROM --platform=${TARGETPLATFORM} scratch AS finalize-pkg
 ARG TARGETARCH
-COPY --from=kernel-install-${TARGETARCH} /rootfs/ /rootfs/
-COPY --from=nvidia-oot-modules-install-${TARGETARCH} /rootfs/ /rootfs/
-FROM --platform=${TARGETPLATFORM} scratch AS pkg-kernel
-COPY --from=finalize-rootfs /rootfs/ /
+COPY --from=kernel-install /rootfs/ /
+COPY --from=nvidia-oot-modules-install /rootfs/ /
