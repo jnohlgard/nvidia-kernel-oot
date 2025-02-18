@@ -93,8 +93,10 @@ ARG TARGETARCH
 RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
   make -j$(nproc) \
     INSTALL_MOD_PATH=/rootfs/usr \
+    INSTALL_DTBS_PATH=/rootfs/boot/dtbs \
     INSTALL_MOD_STRIP=1 \
-    modules_install
+    modules_install \
+    dtbs_install
 RUN KERNELRELEASE=$(cat include/config/kernel.release) && \
   [ -n "${KERNELRELEASE}" ] && \
   xz --stdout --best < Module.symvers > /rootfs/usr/lib/modules/${KERNELRELEASE}/symvers.xz && \
