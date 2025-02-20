@@ -81,7 +81,7 @@ FROM kernel-cross-${TARGETARCH} AS kernel-prepare
 WORKDIR /src/linux
 COPY --from=download-kernel /src/linux/ /src/linux/
 ARG TARGETARCH
-COPY ./config-${TARGETARCH} .config
+COPY files/config-${TARGETARCH} .config
 RUN make -j$(nproc) olddefconfig
 RUN make -j$(nproc) prepare
 FROM kernel-prepare AS kernel-compile
@@ -91,6 +91,8 @@ RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cach
 FROM kernel-compile AS kernel-modules-install
 ARG TARGETARCH
 RUN --mount=type=cache,id=ccache-kernel-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
+  mkdir -p /rootfs/usr/lib/ && \
+  ln -s usr/lib /rootfs/lib && \
   make -j$(nproc) \
     INSTALL_MOD_PATH=/rootfs/usr \
     INSTALL_DTBS_PATH=/rootfs/boot/dtbs \
@@ -116,7 +118,9 @@ ENV KERNEL_PATH=/src/linux
 ENV KERNEL_SRC=/src/linux
 ENV KBUILD_OUTPUT=/src/linux
 ENV INSTALL_MOD_PATH=/rootfs/usr
-ENV INSTALL_MOD_DIR=updates
+ENV INSTALL_DTBS_PATH=/rootfs/boot/nvidia
+ENV INSTALL_MOD_DIR=extras
+COPY files/modules.d/ /etc/modules.d/
 RUN --mount=type=cache,id=ccache-nvidia-oot-compile-${TARGETARCH},target=/root/.cache/ccache/,sharing=locked \
   KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
   [ -n "${KERNELRELEASE}" ] && \
@@ -129,7 +133,12 @@ RUN KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
   make -j$(nproc) \
     MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
     modules_install && \
+  make -j$(nproc) \
+    MODLIB=/rootfs/usr/lib/modules/${KERNELRELEASE}/ \
+    dtbs && \
   rm -f /rootfs/usr/lib/modules/${KERNELRELEASE}/build
+RUN mkdir -p /rootfs/certs/ && \
+  cp ${KBUILD_OUTPUT}/certs/signing_key.x509 /rootfs/certs/
 RUN rm -f /rootfs/usr/lib/modules/*/build
 FROM --platform=${TARGETPLATFORM} scratch AS finalize-pkg
 ARG TARGETARCH
