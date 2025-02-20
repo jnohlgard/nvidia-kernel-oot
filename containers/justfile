@@ -1,0 +1,24 @@
+
+[private]
+default:
+  @just --list
+
+# Build all artifacts
+build: build_kernel
+
+# Build Linux kernel and Nvidia out-of-tree kernel modules as a container image
+build_kernel:
+  #!/bin/sh
+  image_tag=nvidia-kernel:justbuild
+  : ${platform:=linux/arm64}
+  if [ -n "${DOCKER:-}" ]; then
+    docker=${DOCKER}
+  elif command -v docker >/dev/null 2>/dev/null; then
+    docker=docker
+  elif command -v podman >/dev/null 2>/dev/null; then
+    docker=podman
+  fi
+
+  [ -n "${docker:-}" ] || die 'Missing `docker` command, add docker or podman to PATH and try again\n'
+
+  ${docker} build --platform="${platform}" -f {{ quote(source_dir() / 'Containerfile') }} -t "${image_tag}" {{ quote(source_dir()) }}
