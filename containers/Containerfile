@@ -108,7 +108,8 @@ RUN KERNELRELEASE=$(cat include/config/kernel.release) && \
 FROM kernel-compile AS kernel-install
 ARG TARGETARCH
 RUN mkdir -p /rootfs/boot/ && \
-  cp -v arch/${TARGETARCH}/boot/vmlinuz.efi /rootfs/boot/vmlinuz
+  cp -v arch/${TARGETARCH}/boot/vmlinuz.efi /rootfs/boot/vmlinuz && \
+  gzip -c < arch/${TARGETARCH}/boot/Image > /rootfs/boot/Image.gz
 
 FROM kernel-modules-install AS nvidia-oot-compile
 ARG TARGETARCH
