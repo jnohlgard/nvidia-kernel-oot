@@ -1,0 +1,14 @@
+# Python virtualenvs
+.venv/
+mkosi.tools
+mkosi.output/
+mkosi.cache/*
+!mkosi.cache/.keep
+mkosi.local.conf
+mkosi.key
+mkosi.crt
+mkosi.rootpw
+mkosi.passphrase
+tmp/
+# SELinux binary policy package files
+*.pp
