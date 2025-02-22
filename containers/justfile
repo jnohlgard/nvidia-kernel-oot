@@ -20,5 +20,5 @@ build_kernel:
   fi
 
   [ -n "${docker:-}" ] || die 'Missing `docker` command, add docker or podman to PATH and try again\n'
-
+  set -x
   ${docker} build --platform="${platform}" -f {{ quote(source_dir() / 'Containerfile') }} -t "${image_tag}" {{ quote(source_dir()) }}

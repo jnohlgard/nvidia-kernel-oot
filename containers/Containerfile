@@ -141,7 +141,7 @@ RUN KERNELRELEASE=$(cat /src/linux/include/config/kernel.release) && \
 RUN mkdir -p /rootfs/certs/ && \
   cp ${KBUILD_OUTPUT}/certs/signing_key.x509 /rootfs/certs/
 RUN rm -f /rootfs/usr/lib/modules/*/build
-FROM --platform=${TARGETPLATFORM} scratch AS finalize-pkg
+FROM scratch AS finalize-pkg
 ARG TARGETARCH
 COPY --from=kernel-install /rootfs/ /
 COPY --from=nvidia-oot-modules-install /rootfs/ /
